@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interactive stocks</title>
+  <link rel="stylesheet" href="Stocks.css">
+</head>
+<body>
+  <header>Interactive stocks</header>
+  <main>
+    <section id="stock-list">
+      <h2>Stocks</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Ticker</th> 
+            <th>Price</th>
+            <th>Change</th>
+          </tr>
+        </thead>
+        <tbody id="stocks-tbody">
+          <!-- stocks inserted here dynamically -->
+        </tbody>
+      </table>
+    </section>
+    
+
+    <section id="chart-container">
+      <h2>Price Chart</h2>
+      <canvas id="price-chart" height="300"></canvas>
+    </section>
+
+    <section id="trade-panel">
+      <h2>Trade</h2>
+      <div id="wallet">Wallet: $100,000.00</div>
+      <label for="trade-stock">Stock</label>
+      <select id="trade-stock">
+        <!-- options dynamically filled -->
+      </select>
+      <label for="trade-action">Action</label>
+      <select id="trade-action">
+        <option value="buy">Buy</option>
+        <option value="sell">Sell</option>
+      </select>
+      <label for="trade-qty">Quantity</label>
+      <input type="number" min="1" value="1" id="trade-qty" />
+      <button id="trade-submit" disabled>Execute Trade</button>
+      <div id="trade-message" style="margin-top:1rem; height:1.2em;"></div>
+    </section>
+
+    <section id="portfolio-details">
+      <h2>Portfolio</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Stock</th>
+            <th>Qty</th>
+            <th>Avg Price</th>
+            <th>Current Price</th>
+            <th>Value</th>
+          </tr>
+        </thead>
+        <tbody id="portfolio-tbody">
+          <!-- portfolio entries -->
+        </tbody>
+      </table>
+      <div style="margin-top:1rem; font-weight:600; font-size:1.1rem;">
+        Total Portfolio Value: <span id="portfolio-value">$0.00</span>
+      </div>
+    </section>
+  </main>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script>
+    (() => {
+      // Initial wallet cash and state
+      let walletCash = 100000;
+      const walletEl = document.getElementById('wallet');
+      const stocksTbody = document.getElementById('stocks-tbody');
+      const portfolioTbody = document.getElementById('portfolio-tbody');
+      const portfolioValueEl = document.getElementById('portfolio-value');
+      const tradeStockSelect = document.getElementById('trade-stock');
+      const tradeActionSelect = document.getElementById('trade-action');
+      const tradeQtyInput = document.getElementById('trade-qty');
+      const tradeSubmitBtn = document.getElementById('trade-submit');
+      const tradeMsg = document.getElementById('trade-message');
+
+      // Stock data structure: ticker, price history, current price, previous price
+      const stockTickers = ['AAPL', 'GOOGL', 'MSFT', 'TSLA', 'AMZN', 'NFLX', 'FB', 'NVDA'];
+      let stocks = {};
+
+      // Portfolio: { ticker -> { qty, avgPrice } }
+      let portfolio = {};
+
+      // Chart.js instance and data
+      const ctx = document.getElementById('price-chart').getContext('2d');
+      let chart;
+      let chartTicker = stockTickers[0]; // initially selected ticker
+
+      // Helper formatters
+      const formatPrice = price => '$' + price.toFixed(2);
+      const formatChange = (current, prev) => {
+        const diff = current - prev;
+        if (diff === 0) return `<span style="color:#ccc">0.00</span>`;
+        const percent = ((diff) / prev) * 100;
+        const color = diff > 0 ? '#4caf50' : '#e53935';
+        return `<span style="color:${color}">${diff > 0 ? '+' : ''}${diff.toFixed(2)} (${percent.toFixed(2)}%)</span>`;
+      };
+
+      // Initialize stocks with random price and empty history
+      function initStocks() {
+        stockTickers.forEach(ticker => {
+          let startPrice = 100 + Math.random()*400; // $100-$500
+          stocks[ticker] = {
+            ticker,
+            priceHistory: Array(30).fill(startPrice),
+            currentPrice: startPrice,
+            prevPrice: startPrice,
+          };
+        });
+      }
+
+      // Simulate price update using random walk
+      function updatePrices() {
+        Object.values(stocks).forEach(stock => {
+          stock.prevPrice = stock.currentPrice;
+          // Random walk price with small drift and volatility
+          const drift = 0;
+          const volatility = 2;
+          const rnd = (Math.random() - 0.5) * volatility;
+          let newPrice = stock.currentPrice + drift + rnd;
+          if (newPrice < 1) newPrice = 1;
+          stock.currentPrice = newPrice;
+
+          stock.priceHistory.push(newPrice);
+          if (stock.priceHistory.length > 30) stock.priceHistory.shift();
+        });
+      }
+
+      // Render stock list table rows
+      function renderStockList() {
+        stocksTbody.innerHTML = '';
+        Object.values(stocks).forEach(stock => {
+          let tr = document.createElement('tr');
+          tr.dataset.ticker = stock.ticker;
+          tr.innerHTML = `
+            <td>${stock.ticker}</td>
+            <td>${formatPrice(stock.currentPrice)}</td>
+            <td>${formatChange(stock.currentPrice, stock.prevPrice)}</td>
+          `;
+          stocksTbody.appendChild(tr);
+        });
+      }
+
+      // Render portfolio table rows and total value
+      function renderPortfolio() {
+        portfolioTbody.innerHTML = '';
+        let totalValue = 0;
+        for (const [ticker, holding] of Object.entries(portfolio)) {
+          const stock = stocks[ticker];
+          const currPrice = stock.currentPrice;
+          const value = holding.qty * currPrice;
+          totalValue += value;
+          let tr = document.createElement('tr');
+          tr.innerHTML = `
+            <td>${ticker}</td>
+            <td>${holding.qty}</td>
+            <td>${formatPrice(holding.avgPrice)}</td>
+            <td>${formatPrice(currPrice)}</td>
+            <td>${formatPrice(value)}</td>
+          `;
+          portfolioTbody.appendChild(tr);
+        }
+        portfolioValueEl.textContent = formatPrice(totalValue + walletCash);
+        walletEl.textContent = 'Wallet: ' + formatPrice(walletCash);
+      }
+
+      // Update chart data for given ticker
+      function updateChart(ticker) {
+        let stock = stocks[ticker];
+        if (!stock) return;
+        const labels = Array(stock.priceHistory.length).fill('').map((_,i) => i - (stock.priceHistory.length - 1));
+        const data = {
+          labels,
+          datasets: [{
+            label: stock.ticker + ' Price',
+            backgroundColor: '#61dafb88',
+            borderColor: '#61dafb',
+            data: stock.priceHistory,
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+          }]
+        };
+        if (!chart) {
+          chart = new Chart(ctx, {
+            type: 'line',
+            data,
+            options: {
+              responsive: true,
+              scales: {
+                y: {
+                  beginAtZero: false,
+                  ticks: {
+                    color: '#ccc'
+                  },
+                  grid: {
+                    color: '#444'
+                  }
+                },
+                x: {
+                  display: false,
+                  grid: {
+                    color: '#444'
+                  }
+                }
+              },
+              plugins: {
+                legend: {
+                  labels: { color: '#61dafb' }
+                }
+              }
+            }
+          });
+        } else {
+          chart.data = data;
+          chart.update();
+        }
+      }
+
+      // Populate trade-stock select
+      function populateTradeStockSelect() {
+        tradeStockSelect.innerHTML = '';
+        Object.keys(stocks).forEach(ticker => {
+          const option = document.createElement('option');
+          option.value = ticker;
+          option.textContent = ticker;
+          tradeStockSelect.appendChild(option);
+        });
+        tradeStockSelect.value = chartTicker;
+      }
+
+      // Validate trade inputs and enable/disable button
+      function validateTrade() {
+        const qty = parseInt(tradeQtyInput.value, 10);
+        if(isNaN(qty) || qty < 1) {
+          tradeSubmitBtn.disabled = true;
+          return;
+        }
+        const action = tradeActionSelect.value;
+        const ticker = tradeStockSelect.value;
+        const stock = stocks[ticker];
+        const price = stock.currentPrice;
+        if(action === 'buy') {
+          tradeSubmitBtn.disabled = price * qty > walletCash;
+        } else if(action === 'sell') {
+          if(!portfolio[ticker] || portfolio[ticker].qty < qty) {
+            tradeSubmitBtn.disabled = true;
+            return;
+          }
+          tradeSubmitBtn.disabled = false;
+        }
+      }
+
+      // Execute trade action
+      function executeTrade() {
+        const qty = parseInt(tradeQtyInput.value, 10);
+        if (qty < 1) return;
+        const action = tradeActionSelect.value;
+        const ticker = tradeStockSelect.value;
+        const stock = stocks[ticker];
+        const price = stock.currentPrice;
+
+        if(action === 'buy') {
+          const totalCost = price * qty;
+          if(totalCost > walletCash) {
+            tradeMsg.textContent = 'Insufficient funds!';
+            tradeMsg.style.color = '#e53935';
+            return;
+          }
+          walletCash -= totalCost;
+          if(portfolio[ticker]) {
+            const currentHolding = portfolio[ticker];
+            const newQty = currentHolding.qty + qty;
+            const newAvgPrice = ((currentHolding.avgPrice * currentHolding.qty) + totalCost) / newQty;
+            portfolio[ticker] = {qty: newQty, avgPrice: newAvgPrice};
+          } else {
+            portfolio[ticker] = {qty: qty, avgPrice: price};
+          }
+          tradeMsg.textContent = `Bought ${qty} shares of ${ticker} at ${formatPrice(price)} each.`;
+          tradeMsg.style.color = '#90ee90';
+        } else if(action === 'sell') {
+          if(!portfolio[ticker] || portfolio[ticker].qty < qty) {
+            tradeMsg.textContent = `Not enough shares of ${ticker} to sell.`;
+            tradeMsg.style.color = '#e53935';
+            return;
+          }
+          const totalGain = price * qty;
+          walletCash += totalGain;
+          portfolio[ticker].qty -= qty;
+          if(portfolio[ticker].qty === 0) {
+            delete portfolio[ticker];
+          }
+          tradeMsg.textContent = `Sold ${qty} shares of ${ticker} at ${formatPrice(price)} each.`;
+          tradeMsg.style.color = '#90ee90';
+        }
+        renderPortfolio();
+        validateTrade();
+      }
+
+      // Setup event listeners
+      function setupEventListeners() {
+        tradeStockSelect.addEventListener('change', e => {
+          chartTicker = e.target.value;
+          updateChart(chartTicker);
+          validateTrade();
+        });
+
+        tradeActionSelect.addEventListener('change', validateTrade);
+        tradeQtyInput.addEventListener('input', validateTrade);
+        tradeSubmitBtn.addEventListener('click', executeTrade);
+
+        // Clicking on a stock row updates the chart and trade select
+        stocksTbody.addEventListener('click', event => {
+          const tr = event.target.closest('tr');
+          if(!tr) return;
+          const ticker = tr.dataset.ticker;
+          if(ticker) {
+            chartTicker = ticker;
+            tradeStockSelect.value = ticker;
+            updateChart(chartTicker);
+            validateTrade();
+          }
+        });
+      }
+
+      // Main update loop for prices and UI refresh
+      function mainLoop() {
+        updatePrices();
+        renderStockList();
+        renderPortfolio();
+        updateChart(chartTicker);
+      }
+
+      // Initialize app
+      function init() {
+        initStocks();
+        populateTradeStockSelect();
+        setupEventListeners();
+        mainLoop();
+        setInterval(() => {
+          mainLoop();
+        }, 2000); // update prices every 2 seconds
+      }
+
+      init();
+    })();
+  </script>
+</body>
+</html>
+
